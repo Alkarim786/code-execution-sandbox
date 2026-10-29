@@ -9,7 +9,7 @@ A **secure code-execution sandbox and online-judge backend in Go**: untrusted C,
 
 > Project 21 of Karim's 30 Days, 30 Projects series.
 
-> **Platform note.** The sandbox uses Linux kernel features and **only runs on Linux (amd64) as root**. Development here was on Windows 11, so all kernel-level tests ran inside a privileged Docker container on Docker Desktop's WSL2 kernel (6.18, cgroup v2), and CI runs the same container on `ubuntu-latest`. The portable logic (seccomp policy interpreter, judge, service, HTTP queue) is also tested natively on Windows and Linux.
+> **Platform note.** The sandbox uses Linux kernel features and **only runs on Linux (amd64) as root**. Development here was on Windows 11, so all kernel-level tests ran inside a privileged Docker container on Docker Desktop's WSL2 kernel (6.18, cgroup v2). **Known gap: on GitHub's `ubuntu-latest` runner the container cannot enable cgroup controllers (`cgroup.subtree_control: device or resource busy`), so the kernel-level suite currently fails in CI (it is set to fail rather than skip). It passes locally; fixing the CI cgroup setup is open work.** The portable logic (seccomp policy interpreter, judge, service, HTTP queue) is also tested natively on Windows and Linux.
 
 ## Why this exists
 
@@ -134,7 +134,7 @@ docker build -f Dockerfile.test -t sandbox-test . && docker run --rm --privilege
 
 **Portable (ran on Windows locally; CI runs them on Ubuntu and Windows):** the BPF assembler/interpreter (allow, deny, errno, argument filters, `clone` flag filters, wrong arch, x32 aliasing, size limit), the real seccomp policies evaluated without a kernel (21 dangerous syscalls killed, only `AF_UNIX` sockets, run vs toolchain `fork`), verdict classification and output comparison, submission pipeline with a fake runner (compile errors, stop-on-fail, profile/mount choice, limit clamping), and the HTTP queue (202 vs 200, worker-pool bound, 429 back-pressure).
 
-**Kernel-level (privileged container on WSL2; CI repeats it on `ubuntu-latest`), each uses a real malicious program:**
+**Kernel-level (privileged container on WSL2; NOT yet passing in CI, see platform note), each uses a real malicious program:**
 
 | Attack | Result |
 |---|---|
