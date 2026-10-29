@@ -24,8 +24,12 @@ var (
 
 func setup(t testing.TB) {
 	t.Helper()
+	require := os.Getenv("SANDBOX_REQUIRE") == "1" // set in CI: a skipped kernel suite must not look like a pass
 	if os.Geteuid() != 0 {
-		t.Skip("integration tests need root (run: docker compose run --rm test)")
+		if require {
+			t.Fatal("SANDBOX_REQUIRE=1 but not running as root")
+		}
+		t.Skip("integration tests need root (run: docker compose --profile test run --rm test)")
 	}
 	once.Do(func() {
 		workDir, runErr = os.MkdirTemp("", "sandbox-it-")
@@ -38,6 +42,9 @@ func setup(t testing.TB) {
 		}
 	})
 	if runErr != nil {
+		if require {
+			t.Fatalf("SANDBOX_REQUIRE=1 but the sandbox is unavailable: %v", runErr)
+		}
 		t.Skipf("sandbox unavailable in this environment: %v", runErr)
 	}
 }

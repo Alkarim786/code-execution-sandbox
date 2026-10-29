@@ -59,13 +59,22 @@ func NewCgroups() (*Cgroups, error) {
 			return nil, fmt.Errorf("create cgroup %s (need root and a writable cgroup v2): %w", d, err)
 		}
 	}
-	// Move all processes (including ourselves) out of the parent into the runner leaf.
-	procs, err := os.ReadFile(filepath.Join(self, "cgroup.procs"))
-	if err != nil {
-		return nil, err
-	}
-	for _, pid := range strings.Fields(string(procs)) {
-		_ = write(filepath.Join(runner, "cgroup.procs"), pid) // kernel threads / races are fine
+	// Move all processes (including ourselves) out of the parent into the runner leaf. Retry:
+	// a process may fork while we iterate, and any leftover makes enabling controllers fail
+	// with EBUSY ("no internal processes" rule).
+	for attempt := 0; attempt < 20; attempt++ {
+		procs, err := os.ReadFile(filepath.Join(self, "cgroup.procs"))
+		if err != nil {
+			return nil, err
+		}
+		pids := strings.Fields(string(procs))
+		if len(pids) == 0 {
+			break
+		}
+		for _, pid := range pids {
+			_ = write(filepath.Join(runner, "cgroup.procs"), pid) // kernel threads / races are fine
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	avail, err := os.ReadFile(filepath.Join(self, "cgroup.controllers"))
 	if err != nil {
@@ -81,7 +90,7 @@ func NewCgroups() (*Cgroups, error) {
 		return nil, fmt.Errorf("cgroup controllers memory, pids and cpu must all be available, have: %s", avail)
 	}
 	if err := write(filepath.Join(self, "cgroup.subtree_control"), strings.Join(enable, " ")); err != nil {
-		return nil, fmt.Errorf("enable controllers: %w", err)
+		return nil, fmt.Errorf("enable controllers on %s: %w\n%s", self, err, cgroupDiagnostics(self))
 	}
 	if err := write(filepath.Join(jobs, "cgroup.subtree_control"), strings.Join(enable, " ")); err != nil {
 		return nil, fmt.Errorf("enable controllers for jobs: %w", err)
@@ -178,4 +187,26 @@ func (j *Job) Close() {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// cgroupDiagnostics describes the cgroup state, to make environment problems (CI runners, other
+// container runtimes) debuggable from a single error message.
+func cgroupDiagnostics(self string) string {
+	var b strings.Builder
+	for _, f := range []string{"cgroup.type", "cgroup.controllers", "cgroup.subtree_control", "cgroup.procs"} {
+		data, err := os.ReadFile(filepath.Join(self, f))
+		fmt.Fprintf(&b, "  %s = %q (err=%v)\n", f, strings.TrimSpace(string(data)), err)
+	}
+	own, _ := os.ReadFile("/proc/self/cgroup")
+	fmt.Fprintf(&b, "  /proc/self/cgroup = %q\n", strings.TrimSpace(string(own)))
+	if entries, err := os.ReadDir(self); err == nil {
+		var names []string
+		for _, e := range entries {
+			if e.IsDir() {
+				names = append(names, e.Name())
+			}
+		}
+		fmt.Fprintf(&b, "  child cgroups: %v\n", names)
+	}
+	return b.String()
 }

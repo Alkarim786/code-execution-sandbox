@@ -24,8 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -f Dockerfile.test -t sandbox-test .
+      - name: Environment diagnostics
+        run: |
+          docker info --format 'cgroup {{.CgroupVersion}} driver {{.CgroupDriver}} kernel {{.KernelVersion}}'
+          docker run --rm --privileged sandbox-test sh -c 'cat /proc/self/cgroup; for f in cgroup.controllers cgroup.subtree_control cgroup.procs; do echo "$f: $(cat /sys/fs/cgroup/$f | tr "
+" " ")"; done'
       - name: Integration and security suite (privileged container)
-        run: docker run --rm --privileged sandbox-test go test -count=1 -v ./...
+        run: docker run --rm --privileged -e SANDBOX_REQUIRE=1 sandbox-test go test -count=1 -v ./...
 
   image:
     runs-on: ubuntu-latest

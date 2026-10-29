@@ -11,6 +11,8 @@ services:
       context: .
       dockerfile: Dockerfile.test
     privileged: true
+    environment:
+      SANDBOX_REQUIRE: "1"    # fail instead of skip if the sandbox cannot start
     profiles: ["test"]
 
   # Benchmarks (startup overhead, throughput)
