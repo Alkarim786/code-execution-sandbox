@@ -1,0 +1,26 @@
+# Notes for Karim: code-execution-sandbox (Project 21)
+
+## Resume bullets (measured; Docker Desktop/WSL2 on a Ryzen 5 7520U, so timings are noisy)
+
+- Built a **secure code-execution sandbox for an online judge in Go** from raw Linux primitives (user/PID/mount/net/UTS/IPC/cgroup namespaces, `pivot_root`, **cgroup v2**, rlimits, dropped capabilities, **hand-written seccomp-bpf** filter, no libseccomp or Docker/nsjail wrapper) supporting C, C++, Java, JavaScript and Python with AC/WA/TLE/MLE/RE/CE/OLE verdicts behind an HTTP API with a bounded queue and worker pool.
+- Verified isolation with a **22-test malicious-program suite** run against the real kernel: fork bomb stopped at the cgroup `pids.max` (peak 16/16), memory hogs killed by cgroup OOM, infinite loops cut at 510 ms for a 500 ms limit, network blocked at two independent layers, **17 escape syscalls (ptrace, mount, unshare, chroot, bpf, ...) all killed by seccomp**, and zero leftover cgroups/mounts/processes afterwards; 49 test functions, CI on Linux and Windows.
+- Measured and documented the cost of isolation: **~20-80 ms** sandbox startup overhead per execution (two benchmark runs on a nested-virtualised laptop) and **up to 50 Python submissions/s** with 8 workers; designed the seccomp allowlist empirically with `strace` (173 syscalls, 398 BPF instructions) and unit-tested it without a kernel via a BPF interpreter.
+
+## Likely interview questions and pointers
+
+1. **Namespaces vs VMs vs gVisor, and the threat model?** Namespaces + seccomp share the host kernel: cheap (tens of ms) but the attack surface is the allowed syscalls. gVisor interposes a user-space kernel; VMs/Firecracker give hardware isolation. State the limitation explicitly (README "Limitations").
+2. **How do cgroups v2 enforce limits, and why `memory.oom.group`?** `memory.max` triggers the OOM killer inside the cgroup only; `oom.group=1` kills the entire jail instead of one random process; `pids.max` stops fork/thread bombs; `cgroup.kill` is an atomic kill-all. Born-in-cgroup via `CLONE_INTO_CGROUP` removes the race. See `cgroup_linux.go`, `run_linux.go`.
+3. **What does seccomp-bpf do and how did you build the policy?** BPF program runs on every syscall; checks arch (and x32 alias), then an allowlist; kill by default. Argument filters for `ioctl`/`prctl`/`clone`/`socket`. Built from strace traces of each runtime. `bpf.go`, `policy_linux_amd64.go`.
+4. **Why a user namespace, and how do you avoid escapes (TOCTOU, `/proc`, mounts)?** Jail-root is an unprivileged host uid; the program then drops to uid 1000 with an empty capability set and `no_new_privs`. `pivot_root` + detaching the old root leaves no path back; `/proc` is a new mount for the new PID namespace (only PID 1 visible); source is read-only so there is no race to swap files.
+5. **Why `clone3` -> ENOSYS and fork forbidden but threads allowed?** clone3's flags are in userspace memory, so seccomp cannot inspect them; ENOSYS makes glibc fall back to `clone` whose flags are in a register and can be filtered. Threads are `clone` with `CLONE_THREAD`; processes are not allowed in the run profile.
+
+## Understand this before interviews
+
+- **Re-exec pattern (`init_linux.go`)**: Go can't run code between `fork` and `exec`, so the runner starts `/proc/self/exe __sandbox_init` with `Cloneflags`; an `init()` in the package notices the argument, locks the OS thread, builds the jail and `execve`s. The tests re-exec the *test binary* the same way.
+- **Order matters**: private mounts -> tmpfs root and binds -> `pivot_root` -> rlimits -> `chdir` -> drop caps and setuid -> `no_new_privs` + seccomp -> `execve`. After the seccomp filter nothing privileged is possible, and the same OS thread must `execve` (the filter is per-thread, inherited across exec).
+- **The error pipe**: fd 3 is `CLOEXEC`, so a successful exec closes it (parent reads EOF); any setup error is written first, the child exits 125, and the verdict becomes IE (never blamed on the user).
+- **User-namespace gotchas**: host uid 0 isn't mapped, so the child must `setuid(0)` *inside* the namespace to have capabilities; bind-mount read-only remounts must preserve inherited locked flags; job directories must be traversable by host uid 100000+.
+- **BPF layout (`bpf.go`)**: each rule is a self-contained block ending in a return, preceded by `jeq nr, 0, len(block)`, so jump offsets never exceed 255 and the accumulator still holds the syscall number for the next rule. `Eval` re-implements the BPF semantics so the policy is testable on Windows.
+- **Verdict logic (`judge.Classify`)**: limits first (OOM, output cap, wall, CPU), then seccomp `SIGSYS`, then other signals, then exit code.
+- **Honest caveats**: benchmark numbers are noisy (two runs shown); shared kernel; privileged daemon; seccomp verified only for the 5 supported runtimes; CPU accounting on VMs includes steal time (I saw it cause an occasional false TLE).
+- **Things that went wrong, good stories**: child had no capabilities (unmapped uid 0); `MkdirTemp` 0700 dirs unreadable from the jail; Go prints signals as "bad system call" so my SIGSYS check silently never matched; a stack-overflow test was flaky on the VM, leading to a real `stack_mb` limit; my first benchmark was biased by cold caches (bare runs first), fixed with warm-up.

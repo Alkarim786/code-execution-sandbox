@@ -1,0 +1,6 @@
+*.exe
+*.bundle
+*.zip
+/sandboxd
+/bench
+.env

@@ -1,0 +1,34 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    # Portable logic (BPF policy interpreter, judge, service, HTTP queue) on Linux and Windows.
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./internal/judge ./internal/service ./internal/server ./internal/sandbox
+
+  sandbox:
+    # The real thing: namespaces, cgroup v2, seccomp, five language toolchains, malicious programs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f Dockerfile.test -t sandbox-test .
+      - name: Integration and security suite (privileged container)
+        run: docker run --rm --privileged sandbox-test go test -count=1 -v ./...
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t code-execution-sandbox .

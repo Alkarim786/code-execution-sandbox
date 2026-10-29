@@ -1,0 +1,23 @@
+services:
+  # The judge API on http://localhost:8080
+  judge:
+    build: .
+    privileged: true          # namespaces + mounts + cgroups per submission; see README threat model
+    ports: ["8080:8080"]
+
+  # Full integration + security test suite against the real kernel features
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    privileged: true
+    profiles: ["test"]
+
+  # Benchmarks (startup overhead, throughput)
+  bench:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    privileged: true
+    command: ["go", "run", "./cmd/bench"]
+    profiles: ["bench"]
